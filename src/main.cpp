@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cstring>
 #include <csignal>
+#include <array>
 
 #include "windivert.h"
 
@@ -147,80 +148,84 @@ bool LoadConfig(const std::string& filename) {
     return true;
 }
 
-// ==========================================
-// 3. Proxy Protocol v1 & v2 解析器
-// ==========================================
-int ParseProxyProtocol(const char* buf, int len, uint32_t& outClientIpNet) {
-    static const uint8_t v2Sig[12] = { 0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D, 0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A };
-    if (len >= 16 && memcmp(buf, v2Sig, 12) == 0) {
-        uint8_t verCmd = static_cast<uint8_t>(buf[12]);
-        uint8_t fam = static_cast<uint8_t>(buf[13]);
-        uint16_t addrLen = ntohs(*reinterpret_cast<const uint16_t*>(buf + 14));
-        int totalHeaderLen = 16 + addrLen;
-        if (len < totalHeaderLen) return -1;
-
-        if ((verCmd & 0x0F) == 0x01 && fam == 0x11 && addrLen >= 12) { // PROXY + TCP4
-            memcpy(&outClientIpNet, buf + 16, 4);
-            return totalHeaderLen;
-        }
-        return totalHeaderLen;
+bool SendAll(SOCKET dst, const char* data, int len) {
+    int sent = 0;
+    while (sent < len) {
+        int n = send(dst, data + sent, len - sent, 0);
+        if (n <= 0) return false;
+        sent += n;
     }
-
-    if (len >= 6 && strncmp(buf, "PROXY ", 6) == 0) {
-        const char* crlf = nullptr;
-        for (int i = 6; i < len - 1; ++i) {
-            if (buf[i] == '\r' && buf[i + 1] == '\n') {
-                crlf = buf + i;
-                break;
-            }
-        }
-        if (!crlf) return -1;
-
-        std::string headerLine(buf, crlf - buf);
-        std::istringstream iss(headerLine);
-        std::string proto, inetType, srcIpStr;
-        iss >> proto >> inetType >> srcIpStr;
-        if (inetType == "TCP4") {
-            if (inet_pton(AF_INET, srcIpStr.c_str(), &outClientIpNet) != 1) return -1;
-        }
-        return static_cast<int>((crlf - buf) + 2);
-    }
-
-    return 0;
+    return true;
 }
 
-// ==========================================
-// 4. 单个客户端连接的双向流转发
-// ==========================================
+bool ReceiveExact(SOCKET s, char* data, int len) {
+    int received = 0;
+    while (received < len) {
+        int n = recv(s, data + received, len - received, 0);
+        if (n <= 0) return false;
+        received += n;
+    }
+    return true;
+}
+
+// EO adds Proxy Protocol to the TCP byte stream after the TCP handshake.
+// Read exactly the header so that a fragmented header is never mistaken for payload.
+bool ReceiveProxyHeader(SOCKET s, uint32_t& clientIpNet) {
+    static const uint8_t v2Sig[12] = { 0x0D, 0x0A, 0x0D, 0x0A, 0x00, 0x0D,
+                                       0x0A, 0x51, 0x55, 0x49, 0x54, 0x0A };
+    std::array<uint8_t, 16 + 65535> header{};
+    if (!ReceiveExact(s, reinterpret_cast<char*>(header.data()), 1)) return false;
+
+    if (header[0] == 'P') {
+        if (!ReceiveExact(s, reinterpret_cast<char*>(header.data() + 1), 5) ||
+            memcmp(header.data(), "PROXY ", 6) != 0) return false;
+        size_t used = 6;
+        while (used < 108) {
+            if (!ReceiveExact(s, reinterpret_cast<char*>(header.data() + used), 1)) return false;
+            ++used;
+            if (used >= 2 && header[used - 2] == '\r' && header[used - 1] == '\n') break;
+        }
+        if (used < 2 || header[used - 2] != '\r' || header[used - 1] != '\n') return false;
+        std::istringstream iss(std::string(reinterpret_cast<char*>(header.data()), used - 2));
+        std::string marker, family, srcIp, dstIp, srcPort, dstPort;
+        iss >> marker >> family >> srcIp >> dstIp >> srcPort >> dstPort;
+        if (marker != "PROXY" || family != "TCP4" || srcIp.empty() ||
+            inet_pton(AF_INET, srcIp.c_str(), &clientIpNet) != 1) return false;
+        return true;
+    }
+
+    if (header[0] != v2Sig[0] ||
+        !ReceiveExact(s, reinterpret_cast<char*>(header.data() + 1), 15) ||
+        memcmp(header.data(), v2Sig, sizeof(v2Sig)) != 0) return false;
+    const uint8_t verCmd = header[12];
+    const uint8_t famProto = header[13];
+    uint16_t addrLenNet = 0;
+    memcpy(&addrLenNet, header.data() + 14, sizeof(addrLenNet));
+    const uint16_t addrLen = ntohs(addrLenNet);
+    if ((verCmd & 0xF0) != 0x20 || (verCmd & 0x0F) != 0x01 ||
+        famProto != 0x11 || addrLen < 12) return false; // PROXY command, TCP over IPv4
+    if (!ReceiveExact(s, reinterpret_cast<char*>(header.data() + 16), addrLen)) return false;
+    memcpy(&clientIpNet, header.data() + 16, sizeof(clientIpNet));
+    return true;
+}
+
 void PipeData(SOCKET src, SOCKET dst) {
     char buffer[8192];
     while (g_running) {
         int n = recv(src, buffer, sizeof(buffer), 0);
         if (n <= 0) break;
-        int sent = 0;
-        while (sent < n) {
-            int s = send(dst, buffer + sent, n - sent, 0);
-            if (s <= 0) {
-                shutdown(dst, SD_BOTH);
-                return;
-            }
-            sent += s;
+        if (!SendAll(dst, buffer, n)) {
+            shutdown(dst, SD_BOTH);
+            return;
         }
     }
     shutdown(dst, SD_SEND);
 }
 
-void HandleClientConnection(SOCKET clientSock, sockaddr_in clientAddr, uint16_t targetGatePortHost) {
-    char initBuf[4096];
-    int n = recv(clientSock, initBuf, sizeof(initBuf), 0);
-    if (n <= 0) {
-        closesocket(clientSock);
-        return;
-    }
-
-    uint32_t realClientIpNet = clientAddr.sin_addr.s_addr;
-    int headerBytes = ParseProxyProtocol(initBuf, n, realClientIpNet);
-    if (headerBytes < 0) {
+void HandleClientConnection(SOCKET clientSock, uint16_t targetGatePortHost) {
+    uint32_t realClientIpNet = 0;
+    if (!ReceiveProxyHeader(clientSock, realClientIpNet)) {
+        std::cerr << "[Warn] Proxy Protocol 头无效或连接提前关闭，拒绝连接。" << std::endl;
         closesocket(clientSock);
         return;
     }
@@ -268,18 +273,14 @@ void HandleClientConnection(SOCKET clientSock, sockaddr_in clientAddr, uint16_t 
         return;
     }
 
-    int payloadLen = n - headerBytes;
-    if (payloadLen > 0) {
-        send(gateSock, initBuf + headerBytes, payloadLen, 0);
-    }
-
     std::thread t1(PipeData, clientSock, gateSock);
     PipeData(gateSock, clientSock);
+    shutdown(clientSock, SD_BOTH);
+    shutdown(gateSock, SD_BOTH);
     t1.join();
 
     closesocket(gateSock);
     closesocket(clientSock);
-    Sleep(50);
     UnregisterNatSession(g_config.virtualIpNet, realClientIpNet, proxyPortNet, gatePortNet);
 }
 
@@ -380,11 +381,9 @@ void StartListener(uint16_t listenPortHost, uint16_t gatePortHost) {
     std::cout << "[Proxy] 正在监听加速端口 " << listenPortHost << " -> 转发至 Gate 端口 " << gatePortHost << std::endl;
 
     while (g_running) {
-        sockaddr_in clientAddr{};
-        int clientLen = sizeof(clientAddr);
-        SOCKET clientSock = accept(listenSock, (sockaddr*)&clientAddr, &clientLen);
+        SOCKET clientSock = accept(listenSock, nullptr, nullptr);
         if (clientSock != INVALID_SOCKET) {
-            std::thread(HandleClientConnection, clientSock, clientAddr, gatePortHost).detach();
+            std::thread(HandleClientConnection, clientSock, gatePortHost).detach();
         }
     }
     closesocket(listenSock);
