@@ -25,9 +25,10 @@ target_link_libraries(GameRealIpProxy PRIVATE
 
 # 编译完成后自动复制 config.ini 与 WinDivert 运行时文件到输出目录
 add_custom_command(TARGET GameRealIpProxy POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/config.ini"
-        "$<TARGET_FILE_DIR:GameRealIpProxy>/config.ini"
+    COMMAND ${CMAKE_COMMAND}
+        "-DSOURCE_CONFIG=${CMAKE_CURRENT_SOURCE_DIR}/config.ini"
+        "-DOUTPUT_CONFIG=$<TARGET_FILE_DIR:GameRealIpProxy>/config.ini"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CopyConfigIfMissing.cmake"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${WINDIVERT_DIR}/x64/WinDivert.dll"
         "$<TARGET_FILE_DIR:GameRealIpProxy>/WinDivert.dll"

@@ -1,0 +1,12 @@
+if(NOT DEFINED SOURCE_CONFIG OR NOT DEFINED OUTPUT_CONFIG)
+    message(FATAL_ERROR "SOURCE_CONFIG and OUTPUT_CONFIG must be specified")
+endif()
+
+if(NOT EXISTS "${OUTPUT_CONFIG}")
+    get_filename_component(OUTPUT_DIR "${OUTPUT_CONFIG}" DIRECTORY)
+    file(MAKE_DIRECTORY "${OUTPUT_DIR}")
+    file(COPY "${SOURCE_CONFIG}" DESTINATION "${OUTPUT_DIR}")
+    message(STATUS "Copied default config.ini to ${OUTPUT_DIR}")
+else()
+    message(STATUS "Keeping existing config.ini: ${OUTPUT_CONFIG}")
+endif()

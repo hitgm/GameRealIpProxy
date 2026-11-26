@@ -68,7 +68,7 @@
       <AdditionalDependencies>ws2_32.lib;WinDivert.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)config.ini" "$(OutDir)config.ini"
+      <Command>if not exist "$(OutDir)config.ini" copy /Y "$(ProjectDir)config.ini" "$(OutDir)config.ini"
 if exist "$(ProjectDir)third_party\windivert\x64\WinDivert.dll" copy /Y "$(ProjectDir)third_party\windivert\x64\WinDivert.dll" "$(OutDir)WinDivert.dll"
 if exist "$(ProjectDir)third_party\windivert\x64\WinDivert64.sys" copy /Y "$(ProjectDir)third_party\windivert\x64\WinDivert64.sys" "$(OutDir)WinDivert64.sys"</Command>
     </PostBuildEvent>
@@ -94,7 +94,7 @@ if exist "$(ProjectDir)third_party\windivert\x64\WinDivert64.sys" copy /Y "$(Pro
       <AdditionalDependencies>ws2_32.lib;WinDivert.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
-      <Command>copy /Y "$(ProjectDir)config.ini" "$(OutDir)config.ini"
+      <Command>if not exist "$(OutDir)config.ini" copy /Y "$(ProjectDir)config.ini" "$(OutDir)config.ini"
 if exist "$(ProjectDir)third_party\windivert\x64\WinDivert.dll" copy /Y "$(ProjectDir)third_party\windivert\x64\WinDivert.dll" "$(OutDir)WinDivert.dll"
 if exist "$(ProjectDir)third_party\windivert\x64\WinDivert64.sys" copy /Y "$(ProjectDir)third_party\windivert\x64\WinDivert64.sys" "$(OutDir)WinDivert64.sys"</Command>
     </PostBuildEvent>

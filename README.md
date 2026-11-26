@@ -1,6 +1,6 @@
 # GameRealIpProxy - 多 Gate 透明真实 IP 透传网关 (WinDivert + C++17)
 
-本工程专为部署在 Windows Server (2012 R2 / 2019 / 2022) 上的**闭源多 Gate 游戏服务端**设计，通过解析加速节点（如腾讯云 EdgeOne / GAAP）的 Proxy Protocol v1/v2 协议头，结合 **WinDivert 内核级数据包改写**，实现在不修改任何游戏代码的前提下让 Gate 直接读取客户端真实公网 IP。
+本工程专为部署在 Windows Server (2012 R2 / 2019 / 2022) 上的**闭源多 Gate 游戏服务端**设计，支持直连 TCP 和加速节点（如腾讯云 EdgeOne）的 Proxy Protocol v1/v2 TCP4/TCP6；结合 **WinDivert 内核级数据包改写**，让 Gate 在对应网络路径配置正确时读取客户端真实 IP。直连连接使用 TCP 对端地址，加速连接使用 Proxy Protocol 头中的客户端地址。
 
 ## 目录结构说明
 
@@ -46,7 +46,10 @@ GameRealIpProxy/
    - 在“IP 地址”栏点击 **添加**，输入 `10.254.0.1`，子网掩码 `255.255.0.0`（确定保存）。
 2. **修改 `config.ini`**：
    - 将 `TargetGateHost` 修改为当前 Windows 服务器的内网 IP（如 `10.0.0.5`，**不要填 `127.0.0.1`**，否则环回流量不会经过 WinDivert 网络层）。
+   - IPv6 客户端要让 Gate 获取真实 IPv6，需在 `[General]` 同时配置 `VirtualIPv6`（已分配给本机的 IPv6 地址）和 `TargetGateHostIPv6`（Gate 可监听/访问的 IPv6 地址）；只配置其中一个会导致启动失败。Gate 必须接受 IPv6 连接。留空则只启用 IPv4。
    - 在 `[PortMappings]` 下按需增减 `接入端口=Gate端口` 映射规则。
 3. **以管理员权限运行**：
    - 必须右键 **以管理员身份运行** `GameRealIpProxy.exe`（加载 `WinDivert64.sys` 内核驱动需要管理员权限）。
    - 生产环境建议使用 `NSSM` 将其注册为 Windows 系统服务实现开机自启与崩溃守护。
+
+构建时仅在输出目录尚无 `config.ini` 时复制默认配置；已有配置会保留，不会被工程目录中的模板覆盖。
